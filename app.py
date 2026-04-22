@@ -2,7 +2,6 @@ import streamlit as st
 import os
 from utils import analyze_text, predict_from_form
 
-# ---- LLM ----
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -12,7 +11,11 @@ GROQ_API_KEY = "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"
 
 # For deployment use:
 # groq_api_key = os.getenv("GROQ_API_KEY")
+st.write("API KEY FOUND:", bool(groq_api_key))
 
+# UI
+st.set_page_config(page_title="Mental Health AI", page_icon="🧠")
+st.title("🧠 AI Mental Health Assistant")
 # ================= UI =================
 st.set_page_config(page_title="Mental Health AI", page_icon="🧠")
 st.title("🧠 AI Mental Health Assistant")
