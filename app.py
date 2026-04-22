@@ -2,43 +2,55 @@ import streamlit as st
 import os
 from utils import analyze_text, predict_from_form
 
-# ---- LLM (Groq) ----
+# ---- LLM ----
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 
-# API KEY
-groq_api_key = os.getenv("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")
+# ================= API KEY =================
+# 🔴 REPLACE THIS WITH YOUR KEY (for local testing)
+groq_api_key = "YOUR_GROQ_API_KEY"
 
-# LLM Setup
-llm = None
-if groq_api_key:
-    llm = ChatGroq(
-        api_key=groq_api_key,
-        model="llama3-8b-8192"
-    )
+# For deployment use:
+# groq_api_key = os.getenv("GROQ_API_KEY")
 
+# ================= UI =================
 st.set_page_config(page_title="Mental Health AI", page_icon="🧠")
 st.title("🧠 AI Mental Health Assistant")
 
-# -------- CHAT --------
+st.write("API KEY FOUND:", bool(groq_api_key))  # debug
+
+# ================= CHAT =================
 user_input = st.text_input("Talk about how you're feeling:")
 
 if user_input:
 
-    # ---- 1. LLM RESPONSE ----
-    if llm:
-        prompt = ChatPromptTemplate.from_template(
-            "You are a supportive mental health assistant. Respond empathetically.\nUser: {input}"
-        )
-        chain = prompt | llm
-        llm_response = chain.invoke({"input": user_input}).content
-    else:
-        llm_response = "LLM not configured."
+    # ---- LLM RESPONSE ----
+    llm_response = ""
 
-    # ---- 2. RISK ANALYSIS ----
+    if groq_api_key:
+        try:
+            llm = ChatGroq(
+                api_key=groq_api_key,
+                model="llama3-8b-8192"
+            )
+
+            prompt = ChatPromptTemplate.from_template(
+                "You are a calm, supportive mental health assistant. Respond empathetically.\nUser: {input}"
+            )
+
+            chain = prompt | llm
+            llm_response = chain.invoke({"input": user_input}).content
+
+        except Exception as e:
+            llm_response = f"❌ LLM Error: {e}"
+
+    else:
+        llm_response = "❌ API key not found"
+
+    # ---- RISK ANALYSIS ----
     risk = analyze_text(user_input)
 
-    # ---- 3. FINAL OUTPUT ----
+    # ---- OUTPUT ----
     st.subheader("💬 AI Response")
     st.write(llm_response)
 
@@ -50,8 +62,7 @@ if user_input:
     else:
         st.success("🟢 Low Risk")
 
-
-# -------- FORM PREDICTION --------
+# ================= FORM =================
 st.subheader("📊 Mental Health Prediction")
 
 age = st.slider("Age", 18, 60)
@@ -67,5 +78,7 @@ if st.button("Predict Risk"):
 
     if result == "Needs Treatment":
         st.error("⚠️ High Risk Detected")
+    elif result == "Model Not Loaded":
+        st.warning("⚠️ Model not loaded properly")
     else:
         st.success("✅ Low Risk")
