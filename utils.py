@@ -138,13 +138,8 @@ def generate_counseling_response(
         return response.strip() if isinstance(response, str) else str(response).strip()
 
     except Exception as e:
-        # Safe fallback — never expose raw exception to user
         sentiment_clean = sentiment.replace("😢 ", "").replace("😊 ", "").replace("😐 ", "").lower()
-        return (
-            f"I hear that you're feeling {sentiment_clean} right now, and I want you to know "
-            f"that what you're going through is valid. I'm here to listen — would you like to "
-            f"share a bit more about what's been on your mind? ❤️"
-        )
+        return f"[Error: {str(e)}] — I hear that you're feeling {sentiment_clean}. Would you like to share more? ❤️"
 
 
 # ─────────────────────────────────────────────
