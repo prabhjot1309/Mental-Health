@@ -1,4 +1,7 @@
-flask
+streamlit
 numpy
 pandas
 scikit-learn
+langchain
+langchain-core
+langchain-groq
