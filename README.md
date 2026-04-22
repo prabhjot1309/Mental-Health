@@ -21,15 +21,26 @@ Backend: Python (Flask)
 Machine Learning: Scikit-learn , Pandas , NumPy , TF-IDF / text preprocessing
 
 ### 📂 Project Structure (REAL – based on your repo)
-Mindcare-Chatbot/
+Mindcare-Chatbot
+
 │── app.py                         # Main Flask app
+
 │── utils.py                       # Prediction + processing logic
+
 │── model.pkl                      # Trained ML model
+
 │── survey.csv                     # Dataset
+
 │── mental_health_prediction.ipynb # Model training notebook
+
 │── templates/
+
 │   └── index.html                # Frontend UI
+
 │── .streamlit/                   # Streamlit config (optional/unused mix)
+
 │── .devcontainer/                # Dev environment setup
+
 │── requirements.txt
+
 │── README.md
