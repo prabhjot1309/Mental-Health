@@ -1,8 +1,16 @@
 import pickle
 import numpy as np
+import os
 
-# Load model
-model = pickle.load(open("model.pkl", "rb"))
+# Get correct path (important for Streamlit Cloud)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(BASE_DIR, "model.pkl")
+
+# Debug (optional – remove later)
+print("Files in directory:", os.listdir(BASE_DIR))
+
+# Load model safely
+model = pickle.load(open(model_path, "rb"))
 
 # -------- TEXT ANALYSIS --------
 def analyze_text(text):
