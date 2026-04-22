@@ -1,4 +1,4 @@
-### 🧠 MindCare Chatbot – AI Mental Health Prediction System
+### 🧠 MindCare – Mental Health Chatbot & Risk Predictor
 
 
 🚀 Overview
