@@ -23,8 +23,7 @@ except ImportError:
 st.set_page_config(
     page_title="MindWell AI – Mental Health Companion",
     page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="centered"
 )
 
 # ─────────────────────────────────────────────
@@ -103,7 +102,7 @@ st.markdown("""
 # ─────────────────────────────────────────────
 @st.cache_resource
 def init_llm():
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", None)
     if not api_key:
         return None
     try:
@@ -144,48 +143,7 @@ if "clear_input" not in st.session_state:
     st.session_state.clear_input = False
 
 
-# ─────────────────────────────────────────────
-# SIDEBAR — Crisis Resources
-# ─────────────────────────────────────────────
-with st.sidebar:
-    st.header("📞 Emergency Help")
-    st.markdown("""
-**🌍 Crisis Helplines:**
-- 🇺🇸 **USA** — 988 (Suicide & Crisis Lifeline)
-- 🇬🇧 **UK** — 116 123 (Samaritans)
-- 🇦🇺 **Australia** — 13 11 14 (Lifeline)
-- 🇨🇦 **Canada** — 1-833-456-4566
-- 🇮🇳 **India** — 9152987821 (iCall)
-    """)
-    st.warning("💙 This AI is **not** a crisis service. In an emergency, call a helpline above.")
 
-    st.markdown("---")
-
-    # Mood tracker in sidebar
-    st.subheader("📊 Quick Mood Check")
-    mood  = st.slider("😊 Mood",    1, 10, 5, help="1 = very low, 10 = great")
-    anx   = st.slider("😰 Anxiety", 1, 10, 3, help="1 = calm, 10 = very anxious")
-    sleep = st.slider("😴 Sleep",   1, 10, 6, help="1 = terrible, 10 = excellent")
-
-    if st.button("🔍 Assess My Wellbeing", use_container_width=True):
-        # Higher score = higher risk (mood inverted, anxiety direct, sleep inverted)
-        quick_risk = ((10 - mood) + anx + (10 - sleep)) / 30.0
-        if quick_risk > 0.6:
-            st.error(f"🚨 High concern level ({quick_risk:.0%})")
-            st.markdown("Please reach out to a crisis helpline immediately. You are not alone.")
-        elif quick_risk > 0.35:
-            st.warning(f"⚠️ Moderate concern ({quick_risk:.0%})")
-            st.markdown("**Suggestions:** Talk to someone you trust, try a breathing exercise, and aim for 7–8 hours of sleep.")
-        else:
-            st.success(f"✅ You seem to be doing okay ({quick_risk:.0%})")
-            st.markdown("Keep up the good habits — even small things like a walk or journaling help.")
-
-    st.markdown("---")
-    if st.button("🗑️ Clear Chat History", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
-
-    st.caption("*Always seek professional help when needed.*")
 
 
 # ─────────────────────────────────────────────
@@ -285,6 +243,11 @@ if send_btn and user_input.strip():
     st.session_state.clear_input = not st.session_state.clear_input
     st.rerun()
 
+
+# ── Clear chat ──
+if st.button("🗑️ Clear Chat", use_container_width=True):
+    st.session_state.messages = []
+    st.rerun()
 
 # ─────────────────────────────────────────────
 # FOOTER
