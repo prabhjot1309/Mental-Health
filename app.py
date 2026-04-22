@@ -102,9 +102,15 @@ st.markdown("""
 # ─────────────────────────────────────────────
 @st.cache_resource
 def init_llm():
-    api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", None)
+    # Try environment variable first, then Streamlit secrets
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        return None
+        try:
+            api_key = st.secrets["GROQ_API_KEY"]
+        except (KeyError, FileNotFoundError):
+            st.error("❌ GROQ_API_KEY not found. Add it to Streamlit secrets.")
+            return None
+
     try:
         llm = ChatGroq(
             api_key=api_key,
@@ -128,7 +134,8 @@ User message: {input}
 Respond with warmth and care (150–250 words):
 """)
         return prompt | llm | StrOutputParser()
-    except Exception:
+    except Exception as e:
+        st.error(f"❌ LLM init failed: {str(e)}")
         return None
 
 
