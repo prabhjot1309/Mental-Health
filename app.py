@@ -147,9 +147,6 @@ You are MindCare AI, a compassionate mental health support companion.
 - If crisis/self-harm mentioned → urge helpline immediately
 - End with one small actionable step
 
-Conversation so far:
-{history}
-
 User message: {input}
 
 Respond warmly (150–250 words):
@@ -158,16 +155,6 @@ Respond warmly (150–250 words):
     except Exception as e:
         st.error(f"❌ LLM error: {e}")
         return None
-
-
-def build_history_text(messages, exclude_last=0):
-    """Turn stored messages into a short transcript string for LLM context."""
-    subset = messages[:-exclude_last] if exclude_last else messages
-    lines = []
-    for m in subset[-10:]:  # last 10 turns of context is plenty
-        speaker = "User" if m["role"] == "user" else "MindCare"
-        lines.append(f"{speaker}: {m['content']}")
-    return "\n".join(lines) if lines else "(no prior messages)"
 
 
 # ─────────────────────────────────────────────
@@ -391,7 +378,6 @@ with tab_chat:
             if last_user_msg:
                 st.session_state.messages.pop()  # drop old bot reply from view
                 with st.spinner("MindCare is rethinking..."):
-                    history_text = build_history_text(st.session_state.messages, exclude_last=1)
                     new_response = generate_counseling_response(
                         st.session_state.llm, last_user_msg["content"],
                         last_user_msg.get("sentiment"), last_user_msg.get("risk") or 0)
