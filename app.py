@@ -22,29 +22,27 @@ except ImportError:
 st.set_page_config(
     page_title="MindCare – Mental Health Chatbot",
     page_icon="🧠",
-    layout="centered"
+    layout="wide"
 )
 
-# ─────────────────────────────────────────────
-# DATABASE INIT (creates mindcare.db + tables on first run)
-# ─────────────────────────────────────────────
 db.init_db()
 
 # ─────────────────────────────────────────────
-# CSS — matches index.html exactly
+# CSS
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Fraunces:wght@700;900&display=swap');
 #MainMenu, footer, header { visibility: hidden; }
-.block-container { padding-top: 2rem !important; max-width: 860px !important; }
+.block-container { padding-top: 1.5rem !important; max-width: 1100px !important; }
 .stApp { background-color: #0d1117; font-family: 'DM Sans', sans-serif; }
-.mc-header { text-align: center; padding: 10px 0 6px; }
+section[data-testid="stSidebar"] { background-color: #10151c; border-right: 1px solid #2d3748; }
+.mc-header { text-align: center; padding: 6px 0 6px; }
 .mc-header h1 {
-    font-family: 'Fraunces', serif; font-size: 2.4rem; font-weight: 900;
+    font-family: 'Fraunces', serif; font-size: 2.1rem; font-weight: 900;
     color: #6ee7b7; margin: 0; letter-spacing: -0.5px;
 }
-.mc-header p { color: #6b7280; font-size: 0.92rem; margin: 4px 0 0; }
+.mc-header p { color: #6b7280; font-size: 0.9rem; margin: 4px 0 0; }
 .stTabs [data-baseweb="tab-list"] {
     background: #161b22 !important; border-radius: 14px 14px 0 0 !important;
     border-bottom: 1px solid #2d3748 !important; gap: 0 !important; padding: 0 !important;
@@ -63,7 +61,7 @@ st.markdown("""
     border: 1px solid #2d3748 !important; border-top: none !important; padding: 0 !important;
 }
 .chat-scroll {
-    min-height: 380px; max-height: 420px; overflow-y: auto; padding: 20px 20px 8px;
+    min-height: 420px; max-height: 480px; overflow-y: auto; padding: 20px 20px 8px;
     display: flex; flex-direction: column; gap: 12px;
 }
 .chat-scroll::-webkit-scrollbar { width: 4px; }
@@ -83,10 +81,6 @@ st.markdown("""
 }
 .bubble.crisis { background: #450a0a; border: 1px solid #f87171; color: #fecaca; }
 .risk-meta { font-size: 0.72rem; color: #6b7280; margin-top: 5px; }
-.input-row {
-    display: flex; gap: 10px; padding: 14px 20px;
-    border-top: 1px solid #2d3748; background: #161b22; border-radius: 0 0 14px 14px;
-}
 .stTextInput > div > div > input {
     background: #1f2937 !important; border: 1px solid #374151 !important; border-radius: 25px !important;
     color: #e2e8f0 !important; padding: 11px 18px !important; font-size: 0.93rem !important;
@@ -105,7 +99,6 @@ st.markdown("""
     background: #1c1a0e; border: 1px solid #78350f; border-radius: 10px;
     padding: 12px 16px; color: #fbbf24; font-size: 0.85rem; margin-bottom: 20px;
 }
-.stSlider > div { padding: 4px 0 !important; }
 label { color: #d1d5db !important; font-size: 0.9rem !important; }
 .risk-low { background:#0f291a; border:1px solid #166534; color:#bbf7d0; border-radius:12px; padding:16px 20px; margin-top:12px; }
 .risk-medium { background:#1c1a0e; border:1px solid #854d0e; color:#fde68a; border-radius:12px; padding:16px 20px; margin-top:12px; }
@@ -121,6 +114,13 @@ hr { border-color: #2d3748 !important; margin: 8px 0 !important; }
     background: #1f2937; border-radius: 10px; padding: 10px 14px;
     margin-bottom: 8px; font-size: 0.82rem; color: #9ca3af;
 }
+.convo-item {
+    padding: 9px 10px; border-radius: 8px; margin-bottom: 4px;
+    font-size: 0.85rem; color: #d1d5db; cursor: pointer;
+}
+.convo-item.active { background: #1f2937; color: #6ee7b7; }
+.convo-title { font-weight: 500; }
+.convo-date { font-size: 0.7rem; color: #6b7280; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -147,6 +147,9 @@ You are MindCare AI, a compassionate mental health support companion.
 - If crisis/self-harm mentioned → urge helpline immediately
 - End with one small actionable step
 
+Conversation so far:
+{history}
+
 User message: {input}
 
 Respond warmly (150–250 words):
@@ -157,17 +160,28 @@ Respond warmly (150–250 words):
         return None
 
 
+def build_history_text(messages, exclude_last=0):
+    """Turn stored messages into a short transcript string for LLM context."""
+    subset = messages[:-exclude_last] if exclude_last else messages
+    lines = []
+    for m in subset[-10:]:  # last 10 turns of context is plenty
+        speaker = "User" if m["role"] == "user" else "MindCare"
+        lines.append(f"{speaker}: {m['content']}")
+    return "\n".join(lines) if lines else "(no prior messages)"
+
+
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
-if "user" not in st.session_state:
-    st.session_state.user = None          # dict: {id, username, ...} once logged in
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+defaults = {
+    "user": None, "messages": [], "current_conv_id": None,
+    "flip": False, "search_query": "", "renaming_id": None,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 if "llm" not in st.session_state:
     st.session_state.llm = init_llm()
-if "flip" not in st.session_state:
-    st.session_state.flip = False
 
 if not LLM_AVAILABLE:
     st.error("❌ Run: pip install -r requirements.txt")
@@ -176,9 +190,6 @@ if not st.session_state.llm:
     st.error("❌ GROQ_API_KEY missing — add it to Streamlit secrets.")
     st.stop()
 
-# ─────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────
 st.markdown("""
 <div class="mc-header">
     <h1>🧠 MindCare</h1>
@@ -202,8 +213,12 @@ if st.session_state.user is None:
             ok, user, msg = auth.login(u, p)
             if ok:
                 st.session_state.user = user
-                # Load this user's chat history from the database
-                st.session_state.messages = db.get_messages(user["id"])
+                convos = db.get_conversations(user["id"])
+                if not convos:
+                    new_id = db.create_conversation(user["id"], "New Chat")
+                    convos = db.get_conversations(user["id"])
+                st.session_state.current_conv_id = convos[0]["id"]
+                st.session_state.messages = db.get_messages(convos[0]["id"])
                 st.success(msg)
                 st.rerun()
             else:
@@ -223,21 +238,93 @@ if st.session_state.user is None:
                 st.success(msg) if ok else st.error(msg)
 
     st.markdown('</div>', unsafe_allow_html=True)
-    st.stop()  # don't render the rest of the app until logged in
+    st.stop()
 
-# ─────────────────────────────────────────────
-# LOGGED IN — show who's logged in + logout
-# ─────────────────────────────────────────────
-top_l, top_r = st.columns([4, 1])
-with top_l:
-    st.markdown(f"<p style='color:#6b7280;font-size:0.85rem;'>Logged in as <strong style='color:#6ee7b7;'>{st.session_state.user['username']}</strong></p>", unsafe_allow_html=True)
-with top_r:
+user_id = st.session_state.user["id"]
+
+# ══════════════════════════════════════════════
+# SIDEBAR — chat history (ChatGPT-style)
+# ══════════════════════════════════════════════
+with st.sidebar:
+    st.markdown(f"**👤 {st.session_state.user['username']}**")
     if st.button("Log Out", use_container_width=True):
         st.session_state.user = None
         st.session_state.messages = []
+        st.session_state.current_conv_id = None
         st.rerun()
 
-user_id = st.session_state.user["id"]
+    st.markdown("---")
+
+    if st.button("➕ New Chat", use_container_width=True):
+        new_id = db.create_conversation(user_id, "New Chat")
+        st.session_state.current_conv_id = new_id
+        st.session_state.messages = []
+        st.rerun()
+
+    search_query = st.text_input("🔍 Search chats", value=st.session_state.search_query,
+                                  placeholder="Search by title or content...")
+    st.session_state.search_query = search_query
+
+    st.markdown("**History**")
+    convos = db.search_conversations(user_id, search_query) if search_query else db.get_conversations(user_id)
+
+    if not convos:
+        st.caption("No conversations found.")
+
+    for c in convos:
+        is_active = c["id"] == st.session_state.current_conv_id
+        col_a, col_b, col_c = st.columns([5, 1, 1])
+        with col_a:
+            label = ("🟢 " if is_active else "") + c["title"]
+            if st.button(label, key=f"open_{c['id']}", use_container_width=True):
+                st.session_state.current_conv_id = c["id"]
+                st.session_state.messages = db.get_messages(c["id"])
+                st.session_state.renaming_id = None
+                st.rerun()
+        with col_b:
+            if st.button("✏️", key=f"ren_{c['id']}"):
+                st.session_state.renaming_id = c["id"]
+                st.rerun()
+        with col_c:
+            if st.button("🗑️", key=f"del_{c['id']}"):
+                db.delete_conversation(c["id"])
+                if st.session_state.current_conv_id == c["id"]:
+                    remaining = db.get_conversations(user_id)
+                    if remaining:
+                        st.session_state.current_conv_id = remaining[0]["id"]
+                        st.session_state.messages = db.get_messages(remaining[0]["id"])
+                    else:
+                        new_id = db.create_conversation(user_id, "New Chat")
+                        st.session_state.current_conv_id = new_id
+                        st.session_state.messages = []
+                st.rerun()
+
+        if st.session_state.renaming_id == c["id"]:
+            with st.form(f"rename_form_{c['id']}", clear_on_submit=True):
+                new_title = st.text_input("New title", value=c["title"], key=f"title_input_{c['id']}")
+                if st.form_submit_button("Save"):
+                    db.rename_conversation(c["id"], new_title.strip() or "Untitled")
+                    st.session_state.renaming_id = None
+                    st.rerun()
+
+        st.caption(datetime.fromisoformat(c["updated_at"]).strftime("%b %d, %I:%M %p"))
+
+    # Export current conversation
+    if st.session_state.current_conv_id and st.session_state.messages:
+        transcript = "\n\n".join(
+            f"[{m['timestamp']}] {'You' if m['role']=='user' else 'MindCare'}: {m['content']}"
+            for m in st.session_state.messages
+        )
+        st.download_button("⬇️ Export this chat", transcript,
+                            file_name=f"mindcare_chat_{st.session_state.current_conv_id}.txt",
+                            use_container_width=True)
+
+if st.session_state.current_conv_id is None:
+    new_id = db.create_conversation(user_id, "New Chat")
+    st.session_state.current_conv_id = new_id
+    st.session_state.messages = []
+
+conv_id = st.session_state.current_conv_id
 
 # ─────────────────────────────────────────────
 # TABS
@@ -256,14 +343,14 @@ with tab_chat:
             Hello! I'm here to listen and support you. How are you feeling today? 💙
         </div>"""
     else:
-        for msg in st.session_state.messages[-20:]:
+        for msg in st.session_state.messages[-40:]:
             if msg["role"] == "user":
                 bubbles_html += f"""
                 <div class="bubble user">
                     <div class="sender">You</div>
                     {msg["content"]}
                     <div class="risk-meta">
-                        {msg.get("sentiment","—")} &nbsp;·&nbsp;
+                        {msg.get("sentiment") or "—"} &nbsp;·&nbsp;
                         {"🔴" if (msg.get("risk") or 0)>0.7 else "🟡" if (msg.get("risk") or 0)>0.4 else "🟢"}
                         {(msg.get("risk") or 0):.0%} &nbsp;·&nbsp; {msg["timestamp"]}
                     </div>
@@ -281,16 +368,12 @@ with tab_chat:
                     <div class="risk-meta">{msg["timestamp"]}</div>
                 </div>"""
 
-    st.markdown(f'<div class="chat-scroll" id="chat-end">{bubbles_html}</div>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div class="chat-scroll" id="chat-end">{bubbles_html}</div>', unsafe_allow_html=True)
+    st.markdown("""<script>
+        const el = document.getElementById('chat-end');
+        if(el) el.scrollTop = el.scrollHeight;
+        </script>""", unsafe_allow_html=True)
 
-    st.markdown("""
-    <script>
-    const el = document.getElementById('chat-end');
-    if(el) el.scrollTop = el.scrollHeight;
-    </script>""", unsafe_allow_html=True)
-
-    st.markdown('<div class="input-row">', unsafe_allow_html=True)
     col1, col2 = st.columns([5, 1])
     with col1:
         key = f"ci_{st.session_state.flip}"
@@ -299,12 +382,32 @@ with tab_chat:
                                     label_visibility="collapsed")
     with col2:
         send = st.button("Send", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("🗑️ Clear Chat", use_container_width=True):
-        st.session_state.messages = []
-        db.clear_messages(user_id)   # also wipe persisted history
-        st.rerun()
+    col3, col4 = st.columns(2)
+    with col3:
+        if st.button("🔁 Regenerate last response", use_container_width=True,
+                      disabled=not (st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant")):
+            last_user_msg = next((m for m in reversed(st.session_state.messages) if m["role"] == "user"), None)
+            if last_user_msg:
+                st.session_state.messages.pop()  # drop old bot reply from view
+                with st.spinner("MindCare is rethinking..."):
+                    history_text = build_history_text(st.session_state.messages, exclude_last=1)
+                    new_response = generate_counseling_response(
+                        st.session_state.llm, last_user_msg["content"],
+                        last_user_msg.get("sentiment"), last_user_msg.get("risk") or 0)
+                now = datetime.now().strftime("%I:%M %p")
+                bot_msg = {"role": "assistant", "content": new_response,
+                           "crisis": last_user_msg.get("crisis"), "risk": last_user_msg.get("risk"),
+                           "timestamp": now}
+                st.session_state.messages.append(bot_msg)
+                db.save_message(conv_id, "assistant", new_response, None,
+                                 last_user_msg.get("risk"), last_user_msg.get("crisis"), now)
+                st.rerun()
+    with col4:
+        if st.button("🗑️ Clear This Chat", use_container_width=True):
+            st.session_state.messages = []
+            db.clear_messages(conv_id)
+            st.rerun()
 
     if send and user_input.strip():
         text = user_input.strip()
@@ -314,25 +417,24 @@ with tab_chat:
             risk_score = calculate_risk_score(text)
             response = generate_counseling_response(
                 st.session_state.llm, text, sentiment, risk_score)
-
             now = datetime.now().strftime("%I:%M %p")
 
-            user_msg = {
-                "role": "user", "content": text,
-                "sentiment": sentiment, "risk": risk_score,
-                "crisis": crisis_flag, "timestamp": now
-            }
-            bot_msg = {
-                "role": "assistant", "content": response,
-                "crisis": crisis_flag, "risk": risk_score, "timestamp": now
-            }
+            user_msg = {"role": "user", "content": text, "sentiment": sentiment,
+                        "risk": risk_score, "crisis": crisis_flag, "timestamp": now}
+            bot_msg = {"role": "assistant", "content": response,
+                       "crisis": crisis_flag, "risk": risk_score, "timestamp": now}
 
             st.session_state.messages.append(user_msg)
             st.session_state.messages.append(bot_msg)
 
-            # Persist both turns to the database
-            db.save_message(user_id, "user", text, sentiment, risk_score, crisis_flag, now)
-            db.save_message(user_id, "assistant", response, None, risk_score, crisis_flag, now)
+            db.save_message(conv_id, "user", text, sentiment, risk_score, crisis_flag, now)
+            db.save_message(conv_id, "assistant", response, None, risk_score, crisis_flag, now)
+
+            # Auto-title the conversation from the first user message
+            conv = db.get_conversation(conv_id)
+            if conv and conv["title"] == "New Chat":
+                title = (text[:40] + "…") if len(text) > 40 else text
+                db.rename_conversation(conv_id, title)
 
         st.session_state.flip = not st.session_state.flip
         st.rerun()
@@ -356,8 +458,6 @@ with tab_risk:
     if st.button("🔍 Analyze My Risk", use_container_width=True):
         total = sadness + anxiety + (10 - sleep) + (10 - energy) + selfharm
         level = "high" if total > 25 else "medium" if total > 15 else "low"
-
-        # Persist this assessment
         db.save_risk_assessment(user_id, sadness, anxiety, sleep, energy, selfharm, total, level)
 
         if level == "high":
@@ -380,7 +480,6 @@ with tab_risk:
                 <p>Keep up your self-care habits — small daily steps make a big difference.</p>
             </div>""", unsafe_allow_html=True)
 
-    # Show past assessments for this user
     history = db.get_risk_history(user_id)
     if history:
         st.markdown("<hr>", unsafe_allow_html=True)
@@ -395,9 +494,6 @@ with tab_risk:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# FOOTER
-# ─────────────────────────────────────────────
 st.markdown("""
 <div class="mc-footer">
     ⚠️ MindCare is not a substitute for professional mental health care.<br>
