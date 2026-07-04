@@ -16,6 +16,14 @@ try:
 except ImportError:
     LLM_AVAILABLE = False
 
+try:
+    from streamlit_cookies_controller import CookieController
+    COOKIES_AVAILABLE = True
+except ImportError:
+    COOKIES_AVAILABLE = False
+
+REMEMBER_ME_COOKIE = "mindcare_token"
+
 # ─────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────
@@ -26,6 +34,11 @@ st.set_page_config(
 )
 
 db.init_db()
+
+if COOKIES_AVAILABLE:
+    cookie_controller = CookieController()
+else:
+    cookie_controller = None
 
 # ─────────────────────────────────────────────
 # CSS
@@ -137,19 +150,21 @@ def init_llm():
             return None
     try:
         llm = ChatGroq(api_key=api_key, model="llama-3.1-8b-instant",
-                        temperature=0.3, max_tokens=400)
+                        temperature=0.4, max_tokens=120)
         prompt = ChatPromptTemplate.from_template("""
-You are MindCare AI, a compassionate mental health support companion.
-- Always validate feelings first ("I hear you", "That sounds really hard")
-- Use empathy-first language; never minimize emotions
-- Apply CBT techniques gently
-- NEVER diagnose or prescribe
-- If crisis/self-harm mentioned → urge helpline immediately
-- End with one small actionable step
+You are MindCare AI, a warm, level-headed mental health support companion.
+
+Rules:
+- Use common sense — respond like a grounded, emotionally intelligent friend, not a textbook.
+- Keep it SHORT: 2–4 sentences, under 60 words. No long lectures, no filler, no repeating the user's words back at length.
+- Validate the feeling briefly, then offer ONE practical, concrete next step — not a list.
+- Never diagnose or prescribe medication.
+- If the message mentions self-harm, suicide, or crisis: skip brevity limits, respond with care, and clearly urge them to contact a crisis helpline right now.
+- Plain, natural language. No therapy jargon, no bullet points, no headers.
 
 User message: {input}
 
-Respond warmly (150–250 words):
+Your short, common-sense reply:
 """)
         return prompt | llm | StrOutputParser()
     except Exception as e:
@@ -184,6 +199,27 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+def load_conversation_into_session(user_id: int):
+    """Load (or create) this user's most recent conversation into session state."""
+    convos = db.get_conversations(user_id)
+    if not convos:
+        new_id = db.create_conversation(user_id, "New Chat")
+        convos = db.get_conversations(user_id)
+    st.session_state.current_conv_id = convos[0]["id"]
+    st.session_state.messages = db.get_messages(convos[0]["id"])
+
+
+# ══════════════════════════════════════════════
+# AUTO-LOGIN from "remember me" cookie, if present
+# ══════════════════════════════════════════════
+if st.session_state.user is None and cookie_controller is not None:
+    saved_token = cookie_controller.get(REMEMBER_ME_COOKIE)
+    if saved_token:
+        remembered_user = auth.resolve_session_token(saved_token)
+        if remembered_user:
+            st.session_state.user = remembered_user
+            load_conversation_into_session(remembered_user["id"])
+
 # ══════════════════════════════════════════════
 # LOGIN / SIGNUP GATE
 # ══════════════════════════════════════════════
@@ -193,19 +229,21 @@ if st.session_state.user is None:
 
     with tab_login:
         with st.form("login_form"):
-            u = st.text_input("Username")
+            identifier = st.text_input("Username, Email, or Mobile Number")
             p = st.text_input("Password", type="password")
+            remember_me = st.checkbox("Keep me logged in", value=True)
             submitted = st.form_submit_button("Log In", use_container_width=True)
         if submitted:
-            ok, user, msg = auth.login(u, p)
+            ok, user, msg = auth.login(identifier, p)
             if ok:
                 st.session_state.user = user
-                convos = db.get_conversations(user["id"])
-                if not convos:
-                    new_id = db.create_conversation(user["id"], "New Chat")
-                    convos = db.get_conversations(user["id"])
-                st.session_state.current_conv_id = convos[0]["id"]
-                st.session_state.messages = db.get_messages(convos[0]["id"])
+                load_conversation_into_session(user["id"])
+                if remember_me and cookie_controller is not None:
+                    token = auth.create_remember_me_token(user["id"])
+                    cookie_controller.set(
+                        REMEMBER_ME_COOKIE, token,
+                        max_age=auth.SESSION_LIFETIME_DAYS * 24 * 60 * 60,
+                    )
                 st.success(msg)
                 st.rerun()
             else:
@@ -214,6 +252,8 @@ if st.session_state.user is None:
     with tab_signup:
         with st.form("signup_form"):
             new_u = st.text_input("Choose a username")
+            new_email = st.text_input("Email (optional if mobile is given)")
+            new_mobile = st.text_input("Mobile number (optional if email is given)")
             new_p = st.text_input("Choose a password", type="password")
             new_p2 = st.text_input("Confirm password", type="password")
             signed_up = st.form_submit_button("Create Account", use_container_width=True)
@@ -221,7 +261,7 @@ if st.session_state.user is None:
             if new_p != new_p2:
                 st.error("Passwords don't match.")
             else:
-                ok, msg = auth.signup(new_u, new_p)
+                ok, msg = auth.signup(new_u, new_p, email=new_email, mobile=new_mobile)
                 st.success(msg) if ok else st.error(msg)
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -235,6 +275,11 @@ user_id = st.session_state.user["id"]
 with st.sidebar:
     st.markdown(f"**👤 {st.session_state.user['username']}**")
     if st.button("Log Out", use_container_width=True):
+        if cookie_controller is not None:
+            saved_token = cookie_controller.get(REMEMBER_ME_COOKIE)
+            if saved_token:
+                auth.revoke_session_token(saved_token)
+                cookie_controller.remove(REMEMBER_ME_COOKIE)
         st.session_state.user = None
         st.session_state.messages = []
         st.session_state.current_conv_id = None
