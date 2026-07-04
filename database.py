@@ -39,6 +39,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE,
+                mobile TEXT UNIQUE,
                 password_hash TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -79,16 +81,36 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         """)
+        # Persistent "remember me" login sessions, referenced by a token stored
+        # in a browser cookie so users don't need to log in every visit.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+        """)
+
+        # --- Migration: add email/mobile columns to a pre-existing users table ---
+        existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        if "email" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        if "mobile" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN mobile TEXT")
 
 
 # ─────────────────────────────────────────────
 # USERS
 # ─────────────────────────────────────────────
-def create_user(username: str, password_hash: str, salt: str) -> int:
+def create_user(username: str, password_hash: str, salt: str,
+                 email: str = None, mobile: str = None) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
-            (username, password_hash, salt, datetime.now().isoformat()),
+            """INSERT INTO users (username, email, mobile, password_hash, salt, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (username, email or None, mobile or None, password_hash, salt, datetime.now().isoformat()),
         )
         return cur.lastrowid
 
@@ -97,6 +119,57 @@ def get_user_by_username(username: str):
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return dict(row) if row else None
+
+
+def get_user_by_identifier(identifier: str):
+    """Look up a user by username, email, OR mobile number — whichever matches."""
+    identifier = identifier.strip()
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ? OR email = ? OR mobile = ?",
+            (identifier, identifier, identifier),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def is_email_taken(email: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone()
+        return row is not None
+
+
+def is_mobile_taken(mobile: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM users WHERE mobile = ?", (mobile,)).fetchone()
+        return row is not None
+
+
+# ─────────────────────────────────────────────
+# SESSIONS ("remember me" persistent login)
+# ─────────────────────────────────────────────
+def create_session(token: str, user_id: int, expires_at: str):
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, datetime.now().isoformat(), expires_at),
+        )
+
+
+def get_session(token: str):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM sessions WHERE token = ?", (token,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_session(token: str):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
 
 
 # ─────────────────────────────────────────────
