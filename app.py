@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from utils import (
     analyze_sentiment, detect_crisis_keywords,
-    calculate_risk_score, generate_counseling_response
+    calculate_risk_score, stream_counseling_response
 )
 import database as db
 import auth
@@ -22,6 +22,13 @@ try:
 except ImportError:
     COOKIES_AVAILABLE = False
 
+try:
+    from streamlit_oauth import OAuth2Component
+    import httpx
+    OAUTH_AVAILABLE = True
+except ImportError:
+    OAUTH_AVAILABLE = False
+
 REMEMBER_ME_COOKIE = "mindcare_token"
 
 # ─────────────────────────────────────────────
@@ -34,111 +41,116 @@ st.set_page_config(
 )
 
 db.init_db()
+cookie_controller = CookieController() if COOKIES_AVAILABLE else None
 
-if COOKIES_AVAILABLE:
-    cookie_controller = CookieController()
-else:
-    cookie_controller = None
+
+def get_google_oauth():
+    """Google OAuth is optional — only active if these secrets are configured."""
+    if not OAUTH_AVAILABLE:
+        return None
+    try:
+        client_id = st.secrets["GOOGLE_CLIENT_ID"]
+        client_secret = st.secrets["GOOGLE_CLIENT_SECRET"]
+        redirect_uri = st.secrets["GOOGLE_REDIRECT_URI"]
+    except (KeyError, FileNotFoundError):
+        return None
+    oauth2 = OAuth2Component(
+        client_id, client_secret,
+        "https://accounts.google.com/o/oauth2/v2/auth",
+        "https://oauth2.googleapis.com/token",
+        "https://oauth2.googleapis.com/token",
+        "https://oauth2.googleapis.com/revoke",
+    )
+    return oauth2, redirect_uri
+
 
 # ─────────────────────────────────────────────
-# CSS
+# CSS — ChatGPT-inspired dark theme
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Fraunces:wght@700;900&display=swap');
 #MainMenu, footer, header { visibility: hidden; }
-.block-container { padding-top: 1.5rem !important; max-width: 1100px !important; }
+.block-container { padding-top: 1.2rem !important; max-width: 900px !important; }
 .stApp { background-color: #0d1117; font-family: 'DM Sans', sans-serif; }
 section[data-testid="stSidebar"] { background-color: #10151c; border-right: 1px solid #2d3748; }
-.mc-header { text-align: center; padding: 6px 0 6px; }
+
+.auth-shell { display: flex; justify-content: center; padding-top: 5vh; }
+.auth-card {
+    background: #161b22; border: 1px solid #2d3748; border-radius: 16px;
+    padding: 36px 32px; width: 100%; max-width: 400px;
+}
+.auth-logo { text-align: center; margin-bottom: 6px; font-size: 2rem; }
+.auth-title {
+    font-family: 'Fraunces', serif; font-weight: 900; font-size: 1.5rem;
+    text-align: center; color: #e5e7eb; margin-bottom: 4px;
+}
+.auth-subtitle { text-align: center; color: #6b7280; font-size: 0.85rem; margin-bottom: 22px; }
+.auth-divider { display: flex; align-items: center; color: #4b5563; font-size: 0.78rem; margin: 18px 0; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: #2d3748; }
+.auth-divider span { padding: 0 10px; }
+.auth-switch { text-align: center; margin-top: 16px; color: #6b7280; font-size: 0.85rem; }
+
+.sidebar-section-label {
+    color: #6b7280; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; margin: 14px 0 4px 4px;
+}
+.mc-header { text-align: center; padding: 4px 0 4px; }
 .mc-header h1 {
-    font-family: 'Fraunces', serif; font-size: 2.1rem; font-weight: 900;
+    font-family: 'Fraunces', serif; font-size: 1.9rem; font-weight: 900;
     color: #6ee7b7; margin: 0; letter-spacing: -0.5px;
 }
-.mc-header p { color: #6b7280; font-size: 0.9rem; margin: 4px 0 0; }
+.mc-header p { color: #6b7280; font-size: 0.88rem; margin: 4px 0 0; }
+
 .stTabs [data-baseweb="tab-list"] {
-    background: #161b22 !important; border-radius: 14px 14px 0 0 !important;
-    border-bottom: 1px solid #2d3748 !important; gap: 0 !important; padding: 0 !important;
+    background: transparent !important; border-bottom: 1px solid #2d3748 !important;
+    gap: 0 !important;
 }
 .stTabs [data-baseweb="tab"] {
     background: transparent !important; color: #6b7280 !important;
-    font-family: 'DM Sans', sans-serif !important; font-size: 0.92rem !important;
-    font-weight: 500 !important; padding: 14px 32px !important; border-radius: 0 !important;
-    border: none !important; flex: 1; text-align: center;
+    font-size: 0.9rem !important; font-weight: 500 !important; padding: 10px 22px !important;
 }
-.stTabs [aria-selected="true"] {
-    color: #6ee7b7 !important; border-bottom: 2px solid #6ee7b7 !important; background: #1f2937 !important;
+.stTabs [aria-selected="true"] { color: #6ee7b7 !important; border-bottom: 2px solid #6ee7b7 !important; }
+
+[data-testid="stChatMessage"] { padding: 4px 0; }
+.msg-meta { font-size: 0.72rem; color: #6b7280; margin-top: 2px; }
+.crisis-banner {
+    font-size: 0.82rem; margin-bottom: 8px; padding: 8px 12px;
+    background: #7f1d1d; border-radius: 8px; color: #fecaca;
 }
-.stTabs [data-baseweb="tab-panel"] {
-    background: #161b22 !important; border-radius: 0 0 14px 14px !important;
-    border: 1px solid #2d3748 !important; border-top: none !important; padding: 0 !important;
-}
-.chat-scroll {
-    min-height: 420px; max-height: 480px; overflow-y: auto; padding: 20px 20px 8px;
-    display: flex; flex-direction: column; gap: 12px;
-}
-.chat-scroll::-webkit-scrollbar { width: 4px; }
-.chat-scroll::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 4px; }
-.bubble {
-    max-width: 78%; padding: 12px 16px; border-radius: 14px;
-    font-size: 0.92rem; line-height: 1.6; word-wrap: break-word;
-}
-.bubble .sender {
-    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
-    text-transform: uppercase; margin-bottom: 5px; opacity: 0.65;
-}
-.bubble.bot { background: #1a2e1f; color: #bbf7d0; border-bottom-left-radius: 4px; align-self: flex-start; }
-.bubble.user {
-    background: #1e3a5f; color: #bfdbfe; border-bottom-right-radius: 4px;
-    align-self: flex-end; margin-left: auto;
-}
-.bubble.crisis { background: #450a0a; border: 1px solid #f87171; color: #fecaca; }
-.risk-meta { font-size: 0.72rem; color: #6b7280; margin-top: 5px; }
-.stTextInput > div > div > input {
-    background: #1f2937 !important; border: 1px solid #374151 !important; border-radius: 25px !important;
-    color: #e2e8f0 !important; padding: 11px 18px !important; font-size: 0.93rem !important;
-    font-family: 'DM Sans', sans-serif !important;
-}
-.stTextInput > div > div > input:focus { border-color: #6ee7b7 !important; box-shadow: none !important; }
-.stTextInput > div > div > input::placeholder { color: #4b5563 !important; }
+
 .stButton > button {
     background: #6ee7b7 !important; color: #0d1117 !important; border: none !important;
-    border-radius: 25px !important; height: 48px !important; font-weight: 700 !important;
-    font-size: 0.9rem !important; font-family: 'DM Sans', sans-serif !important; transition: opacity 0.2s !important;
+    border-radius: 20px !important; font-weight: 700 !important;
+    font-size: 0.85rem !important; font-family: 'DM Sans', sans-serif !important;
 }
-.stButton > button:hover { opacity: 0.82 !important; }
-.risk-wrap { padding: 24px 20px; }
+.stButton > button:hover { opacity: 0.85 !important; }
+.msg-action-btn button {
+    background: transparent !important; color: #6b7280 !important; font-weight: 400 !important;
+    height: 28px !important; padding: 0 8px !important; border: none !important;
+}
+.msg-action-btn button:hover { color: #6ee7b7 !important; }
+
 .disclaimer-box {
     background: #1c1a0e; border: 1px solid #78350f; border-radius: 10px;
     padding: 12px 16px; color: #fbbf24; font-size: 0.85rem; margin-bottom: 20px;
 }
-label { color: #d1d5db !important; font-size: 0.9rem !important; }
 .risk-low { background:#0f291a; border:1px solid #166534; color:#bbf7d0; border-radius:12px; padding:16px 20px; margin-top:12px; }
 .risk-medium { background:#1c1a0e; border:1px solid #854d0e; color:#fde68a; border-radius:12px; padding:16px 20px; margin-top:12px; }
 .risk-high { background:#450a0a; border:1px solid #f87171; color:#fecaca; border-radius:12px; padding:16px 20px; margin-top:12px; }
 .risk-low h3, .risk-medium h3, .risk-high h3 { font-family: 'Fraunces', serif; font-size: 1.15rem; margin-bottom: 6px; }
-hr { border-color: #2d3748 !important; margin: 8px 0 !important; }
-.mc-footer { text-align: center; color: #374151; font-size: 0.8rem; padding: 20px 0 10px; }
-.auth-box {
-    background: #161b22; border: 1px solid #2d3748; border-radius: 14px;
-    padding: 28px 24px; max-width: 420px; margin: 40px auto 0;
-}
 .history-item {
     background: #1f2937; border-radius: 10px; padding: 10px 14px;
     margin-bottom: 8px; font-size: 0.82rem; color: #9ca3af;
 }
-.convo-item {
-    padding: 9px 10px; border-radius: 8px; margin-bottom: 4px;
-    font-size: 0.85rem; color: #d1d5db; cursor: pointer;
-}
-.convo-item.active { background: #1f2937; color: #6ee7b7; }
-.convo-title { font-weight: 500; }
-.convo-date { font-size: 0.7rem; color: #6b7280; }
+.mc-footer { text-align: center; color: #374151; font-size: 0.8rem; padding: 20px 0 10px; }
+label { color: #d1d5db !important; font-size: 0.9rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
+
 # ─────────────────────────────────────────────
-# INIT LLM
+# INIT LLM — short, common-sense replies
 # ─────────────────────────────────────────────
 @st.cache_resource
 def init_llm():
@@ -172,12 +184,40 @@ Your short, common-sense reply:
         return None
 
 
+def load_conversation_into_session(user_id: int):
+    convos = db.get_conversations(user_id)
+    if not convos:
+        db.create_conversation(user_id, "New Chat")
+        convos = db.get_conversations(user_id)
+    st.session_state.current_conv_id = convos[0]["id"]
+    st.session_state.messages = db.get_messages(convos[0]["id"])
+
+
+def group_conversations_by_date(convos):
+    """Bucket conversations into ChatGPT-style Today / Yesterday / Previous 7 Days / Older."""
+    now = datetime.now()
+    buckets = {"Today": [], "Yesterday": [], "Previous 7 Days": [], "Older": []}
+    for c in convos:
+        updated = datetime.fromisoformat(c["updated_at"])
+        delta_days = (now.date() - updated.date()).days
+        if delta_days == 0:
+            buckets["Today"].append(c)
+        elif delta_days == 1:
+            buckets["Yesterday"].append(c)
+        elif delta_days <= 7:
+            buckets["Previous 7 Days"].append(c)
+        else:
+            buckets["Older"].append(c)
+    return buckets
+
+
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
 defaults = {
     "user": None, "messages": [], "current_conv_id": None,
-    "flip": False, "search_query": "", "renaming_id": None,
+    "search_query": "", "renaming_id": None, "editing_msg_id": None,
+    "auth_mode": "login",
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -192,25 +232,8 @@ if not st.session_state.llm:
     st.error("❌ GROQ_API_KEY missing — add it to Streamlit secrets.")
     st.stop()
 
-st.markdown("""
-<div class="mc-header">
-    <h1>🧠 MindCare</h1>
-    <p>Mental Health Chatbot &amp; Risk Predictor</p>
-</div>
-""", unsafe_allow_html=True)
-
-def load_conversation_into_session(user_id: int):
-    """Load (or create) this user's most recent conversation into session state."""
-    convos = db.get_conversations(user_id)
-    if not convos:
-        new_id = db.create_conversation(user_id, "New Chat")
-        convos = db.get_conversations(user_id)
-    st.session_state.current_conv_id = convos[0]["id"]
-    st.session_state.messages = db.get_messages(convos[0]["id"])
-
-
 # ══════════════════════════════════════════════
-# AUTO-LOGIN from "remember me" cookie, if present
+# AUTO-LOGIN from "remember me" cookie
 # ══════════════════════════════════════════════
 if st.session_state.user is None and cookie_controller is not None:
     saved_token = cookie_controller.get(REMEMBER_ME_COOKIE)
@@ -221,13 +244,47 @@ if st.session_state.user is None and cookie_controller is not None:
             load_conversation_into_session(remembered_user["id"])
 
 # ══════════════════════════════════════════════
-# LOGIN / SIGNUP GATE
+# LOGIN / SIGNUP — ChatGPT-style centered card
 # ══════════════════════════════════════════════
 if st.session_state.user is None:
-    st.markdown('<div class="auth-box">', unsafe_allow_html=True)
-    tab_login, tab_signup = st.tabs(["🔑 Log In", "🆕 Sign Up"])
+    st.markdown('<div class="auth-shell"><div class="auth-card">', unsafe_allow_html=True)
+    st.markdown('<div class="auth-logo">🧠</div>', unsafe_allow_html=True)
 
-    with tab_login:
+    is_login = st.session_state.auth_mode == "login"
+    st.markdown(f'<div class="auth-title">{"Welcome back" if is_login else "Create your account"}</div>',
+                unsafe_allow_html=True)
+    st.markdown(f'<div class="auth-subtitle">{"Log in to continue to MindCare" if is_login else "Get started with MindCare"}</div>',
+                unsafe_allow_html=True)
+
+    google = get_google_oauth()
+    if google:
+        oauth2, redirect_uri = google
+        result = oauth2.authorize_button(
+            "Continue with Google", redirect_uri, "openid email profile",
+            icon="https://www.google.com/favicon.ico", use_container_width=True, pkce="S256",
+        )
+        if result and "token" in result:
+            access_token = result["token"]["access_token"]
+            resp = httpx.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            info = resp.json()
+            user = auth.login_with_google(info.get("email"), info.get("name"))
+            st.session_state.user = user
+            load_conversation_into_session(user["id"])
+            if cookie_controller is not None:
+                token = auth.create_remember_me_token(user["id"])
+                cookie_controller.set(REMEMBER_ME_COOKIE, token,
+                                       max_age=auth.SESSION_LIFETIME_DAYS * 24 * 60 * 60)
+            st.rerun()
+        st.markdown('<div class="auth-divider"><span>OR</span></div>', unsafe_allow_html=True)
+    else:
+        st.button("🔒 Continue with Google (needs setup)", use_container_width=True, disabled=True)
+        st.caption("Add GOOGLE_CLIENT_ID / SECRET / REDIRECT_URI to secrets to enable this.")
+        st.markdown('<div class="auth-divider"><span>OR</span></div>', unsafe_allow_html=True)
+
+    if is_login:
         with st.form("login_form"):
             identifier = st.text_input("Username, Email, or Mobile Number")
             p = st.text_input("Password", type="password")
@@ -240,16 +297,17 @@ if st.session_state.user is None:
                 load_conversation_into_session(user["id"])
                 if remember_me and cookie_controller is not None:
                     token = auth.create_remember_me_token(user["id"])
-                    cookie_controller.set(
-                        REMEMBER_ME_COOKIE, token,
-                        max_age=auth.SESSION_LIFETIME_DAYS * 24 * 60 * 60,
-                    )
+                    cookie_controller.set(REMEMBER_ME_COOKIE, token,
+                                           max_age=auth.SESSION_LIFETIME_DAYS * 24 * 60 * 60)
                 st.success(msg)
                 st.rerun()
             else:
                 st.error(msg)
-
-    with tab_signup:
+        st.markdown('<div class="auth-switch">New here?</div>', unsafe_allow_html=True)
+        if st.button("Create an account", use_container_width=True):
+            st.session_state.auth_mode = "signup"
+            st.rerun()
+    else:
         with st.form("signup_form"):
             new_u = st.text_input("Choose a username")
             new_email = st.text_input("Email (optional if mobile is given)")
@@ -262,15 +320,23 @@ if st.session_state.user is None:
                 st.error("Passwords don't match.")
             else:
                 ok, msg = auth.signup(new_u, new_p, email=new_email, mobile=new_mobile)
-                st.success(msg) if ok else st.error(msg)
+                if ok:
+                    st.success(msg)
+                    st.session_state.auth_mode = "login"
+                else:
+                    st.error(msg)
+        st.markdown('<div class="auth-switch">Already have an account?</div>', unsafe_allow_html=True)
+        if st.button("Log in instead", use_container_width=True):
+            st.session_state.auth_mode = "login"
+            st.rerun()
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
     st.stop()
 
 user_id = st.session_state.user["id"]
 
 # ══════════════════════════════════════════════
-# SIDEBAR — chat history (ChatGPT-style)
+# SIDEBAR — ChatGPT-style grouped history
 # ══════════════════════════════════════════════
 with st.sidebar:
     st.markdown(f"**👤 {st.session_state.user['username']}**")
@@ -294,187 +360,233 @@ with st.sidebar:
         st.rerun()
 
     search_query = st.text_input("🔍 Search chats", value=st.session_state.search_query,
-                                  placeholder="Search by title or content...")
+                                  placeholder="Search by title or content...",
+                                  label_visibility="collapsed")
     st.session_state.search_query = search_query
 
-    st.markdown("**History**")
     convos = db.search_conversations(user_id, search_query) if search_query else db.get_conversations(user_id)
 
     if not convos:
-        st.caption("No conversations found.")
+        st.caption("No conversations yet.")
 
-    for c in convos:
-        is_active = c["id"] == st.session_state.current_conv_id
-        col_a, col_b, col_c = st.columns([5, 1, 1])
-        with col_a:
-            label = ("🟢 " if is_active else "") + c["title"]
-            if st.button(label, key=f"open_{c['id']}", use_container_width=True):
-                st.session_state.current_conv_id = c["id"]
-                st.session_state.messages = db.get_messages(c["id"])
-                st.session_state.renaming_id = None
-                st.rerun()
-        with col_b:
-            if st.button("✏️", key=f"ren_{c['id']}"):
-                st.session_state.renaming_id = c["id"]
-                st.rerun()
-        with col_c:
-            if st.button("🗑️", key=f"del_{c['id']}"):
-                db.delete_conversation(c["id"])
-                if st.session_state.current_conv_id == c["id"]:
-                    remaining = db.get_conversations(user_id)
-                    if remaining:
-                        st.session_state.current_conv_id = remaining[0]["id"]
-                        st.session_state.messages = db.get_messages(remaining[0]["id"])
-                    else:
-                        new_id = db.create_conversation(user_id, "New Chat")
-                        st.session_state.current_conv_id = new_id
-                        st.session_state.messages = []
-                st.rerun()
+    grouped = group_conversations_by_date(convos) if not search_query else {"Search results": convos}
 
-        if st.session_state.renaming_id == c["id"]:
-            with st.form(f"rename_form_{c['id']}", clear_on_submit=True):
-                new_title = st.text_input("New title", value=c["title"], key=f"title_input_{c['id']}")
-                if st.form_submit_button("Save"):
-                    db.rename_conversation(c["id"], new_title.strip() or "Untitled")
+    for label, group in grouped.items():
+        if not group:
+            continue
+        st.markdown(f'<div class="sidebar-section-label">{label}</div>', unsafe_allow_html=True)
+        for c in group:
+            is_active = c["id"] == st.session_state.current_conv_id
+            col_a, col_b, col_c = st.columns([5, 1, 1])
+            with col_a:
+                title = ("🟢 " if is_active else "") + c["title"]
+                if st.button(title, key=f"open_{c['id']}", use_container_width=True):
+                    st.session_state.current_conv_id = c["id"]
+                    st.session_state.messages = db.get_messages(c["id"])
                     st.session_state.renaming_id = None
                     st.rerun()
+            with col_b:
+                if st.button("✏️", key=f"ren_{c['id']}"):
+                    st.session_state.renaming_id = c["id"]
+                    st.rerun()
+            with col_c:
+                if st.button("🗑️", key=f"del_{c['id']}"):
+                    db.delete_conversation(c["id"])
+                    if st.session_state.current_conv_id == c["id"]:
+                        remaining = db.get_conversations(user_id)
+                        if remaining:
+                            st.session_state.current_conv_id = remaining[0]["id"]
+                            st.session_state.messages = db.get_messages(remaining[0]["id"])
+                        else:
+                            new_id = db.create_conversation(user_id, "New Chat")
+                            st.session_state.current_conv_id = new_id
+                            st.session_state.messages = []
+                    st.rerun()
 
-        st.caption(datetime.fromisoformat(c["updated_at"]).strftime("%b %d, %I:%M %p"))
+            if st.session_state.renaming_id == c["id"]:
+                with st.form(f"rename_form_{c['id']}", clear_on_submit=True):
+                    new_title = st.text_input("New title", value=c["title"], key=f"title_input_{c['id']}")
+                    if st.form_submit_button("Save"):
+                        db.rename_conversation(c["id"], new_title.strip() or "Untitled")
+                        st.session_state.renaming_id = None
+                        st.rerun()
 
-    # Export current conversation
     if st.session_state.current_conv_id and st.session_state.messages:
         transcript = "\n\n".join(
             f"[{m['timestamp']}] {'You' if m['role']=='user' else 'MindCare'}: {m['content']}"
             for m in st.session_state.messages
         )
+        st.markdown("---")
         st.download_button("⬇️ Export this chat", transcript,
                             file_name=f"mindcare_chat_{st.session_state.current_conv_id}.txt",
                             use_container_width=True)
 
 if st.session_state.current_conv_id is None:
-    new_id = db.create_conversation(user_id, "New Chat")
-    st.session_state.current_conv_id = new_id
-    st.session_state.messages = []
+    load_conversation_into_session(user_id)
 
 conv_id = st.session_state.current_conv_id
 
-# ─────────────────────────────────────────────
-# TABS
-# ─────────────────────────────────────────────
+st.markdown("""
+<div class="mc-header">
+    <h1>🧠 MindCare</h1>
+    <p>Mental Health Chatbot &amp; Risk Predictor</p>
+</div>
+""", unsafe_allow_html=True)
+
 tab_chat, tab_risk = st.tabs(["💬 Chat", "⚠️ Risk Assessment"])
 
 # ══════════════════════════════════════════════
-# TAB 1 — CHAT
+# TAB 1 — CHAT (native st.chat_message, streaming, copy/edit/regenerate)
 # ══════════════════════════════════════════════
 with tab_chat:
-    bubbles_html = ""
+
+    def run_and_store_reply(conv_id, user_text, sentiment, risk_score, crisis_flag):
+        """Stream a reply into a live chat bubble, then persist it."""
+        with st.chat_message("assistant", avatar="🧠"):
+            if crisis_flag:
+                st.markdown(
+                    '<div class="crisis-banner">🚨 Please reach out to a crisis helpline — you are not alone.</div>',
+                    unsafe_allow_html=True,
+                )
+            full_response = st.write_stream(
+                stream_counseling_response(st.session_state.llm, user_text, sentiment, risk_score)
+            )
+        now = datetime.now().strftime("%I:%M %p")
+        bot_msg_id = db.save_message(conv_id, "assistant", full_response, None, risk_score, crisis_flag, now)
+        st.session_state.messages.append({
+            "id": bot_msg_id, "role": "assistant", "content": full_response,
+            "crisis": crisis_flag, "risk": risk_score, "timestamp": now,
+        })
+
+    def regenerate_last_response():
+        last_user_msg = next((m for m in reversed(st.session_state.messages) if m["role"] == "user"), None)
+        if not last_user_msg:
+            return
+        last_bot_msg = st.session_state.messages[-1]
+        db.truncate_messages_from(conv_id, last_bot_msg["id"])
+        st.session_state.messages.pop()
+        run_and_store_reply(conv_id, last_user_msg["content"], last_user_msg.get("sentiment"),
+                             last_user_msg.get("risk") or 0, last_user_msg.get("crisis", False))
+
+    def submit_edited_message(msg, new_text):
+        """Truncate everything from this message onward, save the edit, and regenerate."""
+        db.truncate_messages_from(conv_id, msg["id"])
+        idx = next(i for i, m in enumerate(st.session_state.messages) if m["id"] == msg["id"])
+        st.session_state.messages = st.session_state.messages[:idx]
+
+        sentiment = analyze_sentiment(new_text)
+        crisis_flag = detect_crisis_keywords(new_text)
+        risk_score = calculate_risk_score(new_text)
+        now = datetime.now().strftime("%I:%M %p")
+        new_msg_id = db.save_message(conv_id, "user", new_text, sentiment, risk_score, crisis_flag, now)
+        st.session_state.messages.append({
+            "id": new_msg_id, "role": "user", "content": new_text,
+            "sentiment": sentiment, "risk": risk_score, "crisis": crisis_flag, "timestamp": now,
+        })
+        st.session_state.editing_msg_id = None
+        run_and_store_reply(conv_id, new_text, sentiment, risk_score, crisis_flag)
+
+    def render_message_actions(msg, index):
+        """Copy button for every message; Edit for user messages; Regenerate for the last assistant message."""
+        is_last = index == len(st.session_state.messages) - 1
+        cols = st.columns([1, 1, 1, 8])
+
+        with cols[0]:
+            st.markdown('<div class="msg-action-btn">', unsafe_allow_html=True)
+            if st.button("📋", key=f"copy_{msg['id']}", help="Show text to copy"):
+                st.session_state[f"show_copy_{msg['id']}"] = True
+            st.markdown('</div>', unsafe_allow_html=True)
+        if st.session_state.get(f"show_copy_{msg['id']}"):
+            st.code(msg["content"], language=None)
+            st.session_state[f"show_copy_{msg['id']}"] = False
+
+        if msg["role"] == "user":
+            with cols[1]:
+                st.markdown('<div class="msg-action-btn">', unsafe_allow_html=True)
+                if st.button("✏️", key=f"edit_{msg['id']}", help="Edit"):
+                    st.session_state.editing_msg_id = msg["id"]
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+
+        if msg["role"] == "assistant" and is_last:
+            with cols[2]:
+                st.markdown('<div class="msg-action-btn">', unsafe_allow_html=True)
+                if st.button("🔁", key=f"regen_{msg['id']}", help="Regenerate"):
+                    regenerate_last_response()
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Render existing messages ──
     if not st.session_state.messages:
-        bubbles_html = """
-        <div class="bubble bot">
-            <div class="sender">MindCare</div>
-            Hello! I'm here to listen and support you. How are you feeling today? 💙
-        </div>"""
+        with st.chat_message("assistant", avatar="🧠"):
+            st.write("Hello! I'm here to listen and support you. How are you feeling today? 💙")
     else:
-        for msg in st.session_state.messages[-40:]:
-            if msg["role"] == "user":
-                bubbles_html += f"""
-                <div class="bubble user">
-                    <div class="sender">You</div>
-                    {msg["content"]}
-                    <div class="risk-meta">
-                        {msg.get("sentiment") or "—"} &nbsp;·&nbsp;
-                        {"🔴" if (msg.get("risk") or 0)>0.7 else "🟡" if (msg.get("risk") or 0)>0.4 else "🟢"}
-                        {(msg.get("risk") or 0):.0%} &nbsp;·&nbsp; {msg["timestamp"]}
-                    </div>
-                </div>"""
-            else:
-                crisis_html = ""
-                if msg.get("crisis"):
-                    crisis_html = """<div style="font-size:0.82rem;margin-bottom:8px;
-                        padding:8px 12px;background:#7f1d1d;border-radius:8px;color:#fecaca;">
-                        🚨 Please reach out to a crisis helpline — you are not alone.</div>"""
-                bubbles_html += f"""
-                <div class="bubble bot {"crisis" if msg.get("crisis") else ""}">
-                    <div class="sender">MindCare</div>
-                    {crisis_html}{msg["content"]}
-                    <div class="risk-meta">{msg["timestamp"]}</div>
-                </div>"""
+        for i, msg in enumerate(st.session_state.messages):
+            avatar = "🧑" if msg["role"] == "user" else "🧠"
+            with st.chat_message(msg["role"], avatar=avatar):
+                if st.session_state.editing_msg_id == msg["id"]:
+                    edited_text = st.text_area("Edit message", value=msg["content"],
+                                                key=f"editbox_{msg['id']}", label_visibility="collapsed")
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        if st.button("Save & Regenerate", key=f"save_{msg['id']}", use_container_width=True):
+                            submit_edited_message(msg, edited_text.strip())
+                            st.rerun()
+                    with ec2:
+                        if st.button("Cancel", key=f"cancel_{msg['id']}", use_container_width=True):
+                            st.session_state.editing_msg_id = None
+                            st.rerun()
+                else:
+                    if msg["role"] == "assistant" and msg.get("crisis"):
+                        st.markdown(
+                            '<div class="crisis-banner">🚨 Please reach out to a crisis helpline — you are not alone.</div>',
+                            unsafe_allow_html=True,
+                        )
+                    st.write(msg["content"])
+                    if msg["role"] == "user":
+                        meta_bits = [msg.get("sentiment") or "—",
+                                     f"{(msg.get('risk') or 0):.0%} risk", msg["timestamp"]]
+                    else:
+                        meta_bits = [msg["timestamp"]]
+                    st.markdown(f'<div class="msg-meta">{" · ".join(meta_bits)}</div>', unsafe_allow_html=True)
+                    render_message_actions(msg, i)
 
-    st.markdown(f'<div class="chat-scroll" id="chat-end">{bubbles_html}</div>', unsafe_allow_html=True)
-    st.markdown("""<script>
-        const el = document.getElementById('chat-end');
-        if(el) el.scrollTop = el.scrollHeight;
-        </script>""", unsafe_allow_html=True)
+    # ── Chat input (native Enter-to-send) ──
+    user_input = st.chat_input("Share how you're feeling...")
 
-    col1, col2 = st.columns([5, 1])
-    with col1:
-        key = f"ci_{st.session_state.flip}"
-        user_input = st.text_input("msg", key=key,
-                                    placeholder="Share how you're feeling...",
-                                    label_visibility="collapsed")
-    with col2:
-        send = st.button("Send", use_container_width=True)
-
-    col3, col4 = st.columns(2)
-    with col3:
-        if st.button("🔁 Regenerate last response", use_container_width=True,
-                      disabled=not (st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant")):
-            last_user_msg = next((m for m in reversed(st.session_state.messages) if m["role"] == "user"), None)
-            if last_user_msg:
-                st.session_state.messages.pop()  # drop old bot reply from view
-                with st.spinner("MindCare is rethinking..."):
-                    new_response = generate_counseling_response(
-                        st.session_state.llm, last_user_msg["content"],
-                        last_user_msg.get("sentiment"), last_user_msg.get("risk") or 0)
-                now = datetime.now().strftime("%I:%M %p")
-                bot_msg = {"role": "assistant", "content": new_response,
-                           "crisis": last_user_msg.get("crisis"), "risk": last_user_msg.get("risk"),
-                           "timestamp": now}
-                st.session_state.messages.append(bot_msg)
-                db.save_message(conv_id, "assistant", new_response, None,
-                                 last_user_msg.get("risk"), last_user_msg.get("crisis"), now)
-                st.rerun()
-    with col4:
-        if st.button("🗑️ Clear This Chat", use_container_width=True):
-            st.session_state.messages = []
-            db.clear_messages(conv_id)
-            st.rerun()
-
-    if send and user_input.strip():
+    if user_input and user_input.strip():
         text = user_input.strip()
-        with st.spinner("MindCare is listening..."):
-            sentiment = analyze_sentiment(text)
-            crisis_flag = detect_crisis_keywords(text)
-            risk_score = calculate_risk_score(text)
-            response = generate_counseling_response(
-                st.session_state.llm, text, sentiment, risk_score)
-            now = datetime.now().strftime("%I:%M %p")
+        sentiment = analyze_sentiment(text)
+        crisis_flag = detect_crisis_keywords(text)
+        risk_score = calculate_risk_score(text)
+        now = datetime.now().strftime("%I:%M %p")
 
-            user_msg = {"role": "user", "content": text, "sentiment": sentiment,
-                        "risk": risk_score, "crisis": crisis_flag, "timestamp": now}
-            bot_msg = {"role": "assistant", "content": response,
-                       "crisis": crisis_flag, "risk": risk_score, "timestamp": now}
+        with st.chat_message("user", avatar="🧑"):
+            st.write(text)
 
-            st.session_state.messages.append(user_msg)
-            st.session_state.messages.append(bot_msg)
+        user_msg_id = db.save_message(conv_id, "user", text, sentiment, risk_score, crisis_flag, now)
+        st.session_state.messages.append({
+            "id": user_msg_id, "role": "user", "content": text,
+            "sentiment": sentiment, "risk": risk_score, "crisis": crisis_flag, "timestamp": now,
+        })
 
-            db.save_message(conv_id, "user", text, sentiment, risk_score, crisis_flag, now)
-            db.save_message(conv_id, "assistant", response, None, risk_score, crisis_flag, now)
+        conv = db.get_conversation(conv_id)
+        if conv and conv["title"] == "New Chat":
+            title = (text[:40] + "…") if len(text) > 40 else text
+            db.rename_conversation(conv_id, title)
 
-            # Auto-title the conversation from the first user message
-            conv = db.get_conversation(conv_id)
-            if conv and conv["title"] == "New Chat":
-                title = (text[:40] + "…") if len(text) > 40 else text
-                db.rename_conversation(conv_id, title)
+        run_and_store_reply(conv_id, text, sentiment, risk_score, crisis_flag)
+        st.rerun()
 
-        st.session_state.flip = not st.session_state.flip
+    if st.button("🗑️ Clear This Chat"):
+        st.session_state.messages = []
+        db.clear_messages(conv_id)
         st.rerun()
 
 # ══════════════════════════════════════════════
 # TAB 2 — RISK ASSESSMENT
 # ══════════════════════════════════════════════
 with tab_risk:
-    st.markdown('<div class="risk-wrap">', unsafe_allow_html=True)
     st.markdown("""<div class="disclaimer-box">
         ⚠️ <strong>Important:</strong> This is NOT a clinical diagnosis.
         Please consult a healthcare professional for proper assessment.
@@ -522,8 +634,6 @@ with tab_risk:
                 Score {h['total_score']}/50 &nbsp;·&nbsp; {h['timestamp']}</div>""",
                 unsafe_allow_html=True
             )
-
-    st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <div class="mc-footer">
