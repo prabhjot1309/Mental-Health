@@ -83,6 +83,18 @@ def login(identifier: str, password: str):
 
 
 # ─────────────────────────────────────────────
+# GOOGLE SIGN-IN
+# ─────────────────────────────────────────────
+def login_with_google(email: str, display_name: str = None):
+    """
+    Find-or-create an account for a Google-authenticated email and return it.
+    No password check needed — Google already verified the person's identity.
+    Returns the user dict.
+    """
+    return db.get_or_create_google_user(email.strip().lower(), display_name)
+
+
+# ─────────────────────────────────────────────
 # "REMEMBER ME" SESSION TOKENS
 # ─────────────────────────────────────────────
 def create_remember_me_token(user_id: int) -> str:
