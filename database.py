@@ -150,6 +150,42 @@ def is_mobile_taken(mobile: str) -> bool:
         return row is not None
 
 
+def get_or_create_google_user(email: str, display_name: str = None):
+    """
+    Used for 'Continue with Google' sign-in. If an account with this email
+    already exists, return it. Otherwise auto-create one (no password needed
+    since Google already verified identity) and return the new record.
+    """
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if row:
+            return dict(row)
+
+        base_username = (display_name or email.split("@")[0]).strip().replace(" ", "_")
+        username = base_username
+        suffix = 1
+        while conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            suffix += 1
+            username = f"{base_username}{suffix}"
+
+        # Google-authenticated accounts don't need a local password; store an
+        # unusable random hash so the column constraints are still satisfied.
+        import secrets as _secrets
+        salt = _secrets.token_hex(16)
+        password_hash = _secrets.token_hex(32)
+
+        cur = conn.execute(
+            """INSERT INTO users (username, email, mobile, password_hash, salt, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (username, email, None, password_hash, salt, datetime.now().isoformat()),
+        )
+        new_id = cur.lastrowid
+        return {
+            "id": new_id, "username": username, "email": email, "mobile": None,
+            "password_hash": password_hash, "salt": salt, "created_at": datetime.now().isoformat(),
+        }
+
+
 # ─────────────────────────────────────────────
 # SESSIONS ("remember me" persistent login)
 # ─────────────────────────────────────────────
@@ -224,15 +260,26 @@ def get_conversation(conversation_id: int):
 # MESSAGES
 # ─────────────────────────────────────────────
 def save_message(conversation_id: int, role: str, content: str, sentiment: str = None,
-                  risk: float = None, crisis: bool = False, timestamp: str = None):
+                  risk: float = None, crisis: bool = False, timestamp: str = None) -> int:
     with get_connection() as conn:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO messages (conversation_id, role, content, sentiment, risk, crisis, timestamp)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (conversation_id, role, content, sentiment, risk, int(crisis),
              timestamp or datetime.now().strftime("%I:%M %p")),
         )
+        new_id = cur.lastrowid
     touch_conversation(conversation_id)
+    return new_id
+
+
+def truncate_messages_from(conversation_id: int, message_id: int):
+    """Delete this message and everything after it (used when editing a message)."""
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND id >= ?",
+            (conversation_id, message_id),
+        )
 
 
 def get_messages(conversation_id: int, limit: int = 500):
