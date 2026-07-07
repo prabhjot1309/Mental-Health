@@ -96,42 +96,56 @@ def calculate_risk_score(text: str) -> float:
 # ─────────────────────────────────────────────
 # LLM RESPONSE GENERATION
 # ─────────────────────────────────────────────
-def build_enriched_input(user_input: str, sentiment: str, risk_score: float) -> str:
+def build_enriched_input(user_input: str, sentiment: str, risk_score: float,
+                          last_bot_reply: str = None) -> str:
     """
-    Build the enriched prompt input (risk context + sentiment + message)
-    shared by both the normal and streaming response paths, so streaming
-    still benefits from the same risk-aware context injection.
+    Build the enriched prompt input. Only inject a risk-context note when
+    risk is actually elevated — otherwise the model sees the user's raw
+    message untouched. (Previously we also injected a literal sentiment tag
+    like "User sentiment signal: 😐 Neutral" into every single message,
+    which was pushing the model toward the same templated reply for every
+    message in that sentiment bucket instead of responding to what was
+    actually said. That's removed now.)
+
+    If last_bot_reply is given, it's included so the model can deliberately
+    avoid repeating the same opening phrase/style two turns in a row.
     """
-    risk_context = ""
-    if risk_score > 0.7:
-        risk_context = (
-            "[ALERT: High risk detected. Prioritise crisis resources and urge the user "
-            "to call a helpline immediately. Keep tone calm and non-alarming.]"
-        )
-    elif risk_score > 0.4:
-        risk_context = (
-            "[Note: Moderate distress detected. Be extra empathetic and suggest "
-            "professional support gently.]"
+    variety_note = ""
+    if last_bot_reply:
+        variety_note = (
+            f"[Your previous reply was: \"{last_bot_reply}\" — "
+            "do NOT open your new reply the same way or reuse its structure.]\n"
         )
 
-    return (
-        f"{risk_context}\n"
-        f"User sentiment signal: {sentiment}\n"
-        f"User message: {user_input}"
-    ).strip()
+    if risk_score > 0.7:
+        return (
+            f"{variety_note}"
+            "[ALERT: High risk detected. Prioritise crisis resources and urge the user "
+            "to call a helpline immediately. Keep tone calm and non-alarming.]\n"
+            f"User message: {user_input}"
+        )
+    elif risk_score > 0.4:
+        return (
+            f"{variety_note}"
+            "[Note: Moderate distress detected. Be extra empathetic and suggest "
+            "professional support gently, without sounding alarmed.]\n"
+            f"User message: {user_input}"
+        )
+    return f"{variety_note}User message: {user_input}" if variety_note else user_input
 
 
 def generate_counseling_response(
     chain,               # LangChain chain (prompt | llm | StrOutputParser)
     user_input: str,
     sentiment: str,
-    risk_score: float
+    risk_score: float,
+    last_bot_reply: str = None
 ) -> str:
     """
     Invoke the LangChain chain with enriched context injected into the prompt.
     Falls back to a safe empathetic message if the chain fails.
     """
-    enriched_input = build_enriched_input(user_input, sentiment, risk_score)
+    enriched_input = build_enriched_input(user_input, sentiment, risk_score, last_bot_reply)
     try:
         response = chain.invoke({"input": enriched_input})
         return response.strip() if isinstance(response, str) else str(response).strip()
@@ -140,13 +154,14 @@ def generate_counseling_response(
         return f"[Error: {str(e)}] — I hear that you're feeling {sentiment_clean}. Would you like to share more? ❤️"
 
 
-def stream_counseling_response(chain, user_input: str, sentiment: str, risk_score: float):
+def stream_counseling_response(chain, user_input: str, sentiment: str, risk_score: float,
+                                last_bot_reply: str = None):
     """
     Same enrichment/context logic as generate_counseling_response, but yields
     the response incrementally for a live 'typing' effect in the UI.
     Falls back to a single-chunk safe message if streaming fails.
     """
-    enriched_input = build_enriched_input(user_input, sentiment, risk_score)
+    enriched_input = build_enriched_input(user_input, sentiment, risk_score, last_bot_reply)
     try:
         for chunk in chain.stream({"input": enriched_input}):
             yield chunk if isinstance(chunk, str) else str(chunk)
