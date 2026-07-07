@@ -99,13 +99,17 @@ def calculate_risk_score(text: str) -> float:
 def build_enriched_input(user_input: str, sentiment: str, risk_score: float,
                           last_bot_reply: str = None) -> str:
     """
-    Build the enriched prompt input. Only inject a risk-context note when
-    risk is actually elevated — otherwise the model sees the user's raw
-    message untouched. (Previously we also injected a literal sentiment tag
-    like "User sentiment signal: 😐 Neutral" into every single message,
-    which was pushing the model toward the same templated reply for every
-    message in that sentiment bucket instead of responding to what was
-    actually said. That's removed now.)
+    Build the enriched prompt input. Only a genuine high-risk/crisis note
+    gets injected — everything else is the user's raw message untouched.
+
+    Earlier versions also injected a "moderate distress" note whenever
+    risk_score > 0.4, and before that a literal sentiment tag on every
+    message. Both were firing on ordinary messages (a handful of words
+    like "tired"/"sad"/"lonely" easily crosses 0.4) and injecting the
+    exact same boilerplate text each time, which is what was actually
+    causing near-identical replies — the model was responding to the
+    repeated instruction text more than to what the person said. Only
+    real crisis-level risk (>0.7) gets a note now.
 
     If last_bot_reply is given, it's included so the model can deliberately
     avoid repeating the same opening phrase/style two turns in a row.
@@ -122,13 +126,6 @@ def build_enriched_input(user_input: str, sentiment: str, risk_score: float,
             f"{variety_note}"
             "[ALERT: High risk detected. Prioritise crisis resources and urge the user "
             "to call a helpline immediately. Keep tone calm and non-alarming.]\n"
-            f"User message: {user_input}"
-        )
-    elif risk_score > 0.4:
-        return (
-            f"{variety_note}"
-            "[Note: Moderate distress detected. Be extra empathetic and suggest "
-            "professional support gently, without sounding alarmed.]\n"
             f"User message: {user_input}"
         )
     return f"{variety_note}User message: {user_input}" if variety_note else user_input
