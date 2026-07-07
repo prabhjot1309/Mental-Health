@@ -9,3 +9,4 @@ scikit-learn
 python-dotenv
 streamlit-cookies-controller
 streamlit-oauth
+psycopg2-binary
