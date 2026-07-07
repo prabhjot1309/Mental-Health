@@ -162,7 +162,8 @@ def init_llm():
             return None
     try:
         llm = ChatGroq(api_key=api_key, model="llama-3.1-8b-instant",
-                        temperature=0.75, max_tokens=150)
+                        temperature=0.75, max_tokens=150,
+                        model_kwargs={"frequency_penalty": 0.6, "presence_penalty": 0.4})
         prompt = ChatPromptTemplate.from_template("""
 You are MindCare AI, a grounded, emotionally intelligent counselor-friend. You listen carefully and respond to what THIS specific person just said — never a generic template.
 
