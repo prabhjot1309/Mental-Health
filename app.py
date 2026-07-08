@@ -31,6 +31,16 @@ except ImportError:
 
 REMEMBER_ME_COOKIE = "mindcare_token"
 
+# This banner is shown whenever a message is keyword-flagged as crisis/self-harm,
+# regardless of what the LLM itself says — a hard safety net so real helpline
+# numbers are ALWAYS shown, not dependent on the model getting it right.
+CRISIS_BANNER_HTML = (
+    '<div class="crisis-banner">🚨 If you\'re thinking about suicide or self-harm, '
+    'please reach out right now — you don\'t have to go through this alone.<br>'
+    '🇮🇳 India: iCall <b>9152987821</b> · AASRA <b>9820466726</b> &nbsp;|&nbsp; '
+    '🇺🇸 USA: <b>988</b> &nbsp;|&nbsp; 🇬🇧 UK: <b>116 123</b></div>'
+)
+
 # ─────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────
@@ -467,12 +477,10 @@ with tab_chat:
 
         with st.chat_message("assistant", avatar="🧠"):
             if crisis_flag:
-                st.markdown(
-                    '<div class="crisis-banner">🚨 Please reach out to a crisis helpline — you are not alone.</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(CRISIS_BANNER_HTML, unsafe_allow_html=True)
             full_response = st.write_stream(
-                stream_counseling_response(st.session_state.llm, user_text, sentiment, risk_score, last_bot_reply)
+                stream_counseling_response(st.session_state.llm, user_text, sentiment, risk_score,
+                                            last_bot_reply, crisis_flag)
             )
         now = datetime.now().strftime("%I:%M %p")
         bot_msg_id = db.save_message(conv_id, "assistant", full_response, None, risk_score, crisis_flag, now)
@@ -561,10 +569,7 @@ with tab_chat:
                             st.rerun()
                 else:
                     if msg["role"] == "assistant" and msg.get("crisis"):
-                        st.markdown(
-                            '<div class="crisis-banner">🚨 Please reach out to a crisis helpline — you are not alone.</div>',
-                            unsafe_allow_html=True,
-                        )
+                        st.markdown(CRISIS_BANNER_HTML, unsafe_allow_html=True)
                     st.write(msg["content"])
                     if msg["role"] == "user":
                         meta_bits = [msg.get("sentiment") or "—",
